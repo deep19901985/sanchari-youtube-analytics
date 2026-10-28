@@ -1,0 +1,32 @@
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Local configuration, secrets and credential stores
+.env
+.env.*
+!.env.example
+client_secret*.json
+credentials*.json
+token*.json
+.databrickscfg
+profiles.yml
+*.pem
+*.key
+
+# Extracted channel data and run artifacts (do not publish without review)
+data/
+landing/
+artifacts/
+logs/
+*.sqlite
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/settings.json
