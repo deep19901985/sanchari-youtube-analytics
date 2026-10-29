@@ -1,9 +1,6 @@
-"""Validate all Day 3 all-video landing runs and the current checkpoint.
+"""Validate all Day 3 all-video landing runs and the checkpoint it references."""
 
-Run from repository root after installing the editable project:
-    python scripts/validate_youtube_analytics_landing.py
-"""
-
+import json
 from pathlib import Path
 
 from sanchari.analytics_quality import (
@@ -21,7 +18,6 @@ def main():
     for directory in sorted(LANDING.iterdir()):
         if not directory.is_dir():
             continue
-        # Previous single-video experiments use a different data contract.
         manifest = load_manifest(directory)
         if not is_all_video_run(manifest):
             skipped += 1
@@ -37,9 +33,14 @@ def main():
     if len(channel_ids) != 1:
         raise ValueError("Different channels found in all-video runs")
 
-    latest = max(runs, key=lambda r: r["run_id"])
-    validate_checkpoint(CHECKPOINT, latest)
-    print("PASS checkpoint ->", latest["run_id"])
+    # Historical backfills created later should not advance the incremental
+    # checkpoint. Verify the particular validated run that the checkpoint names.
+    state = json.loads(CHECKPOINT.read_text(encoding="utf-8"))
+    checkpoint_run = next((r for r in runs if r["run_id"] == state.get("last_run_id")), None)
+    if checkpoint_run is None:
+        raise ValueError("Checkpoint does not point to any validated run")
+    validate_checkpoint(CHECKPOINT, checkpoint_run)
+    print("PASS checkpoint ->", checkpoint_run["run_id"])
     print(f"VALIDATION PASSED: {len(runs)} complete run(s), "
           f"{skipped} single-video experiment(s) skipped")
     print("Note: overlaps across runs are expected; do not sum raw row counts.")
