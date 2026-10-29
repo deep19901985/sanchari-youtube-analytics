@@ -30,3 +30,9 @@ logs/
 .DS_Store
 Thumbs.db
 .vscode/settings.json
+
+# Local historical YouTube extraction archive
+/sanchari_day3_runs.zip
+
+# Raw local API extraction files
+/data/landing/
