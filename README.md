@@ -1,105 +1,138 @@
 # Sanchari — YouTube Analytics Data Engineering
 
-An educational portfolio lakehouse: **YouTube APIs → JSON landing → Bronze Delta → Silver Delta/PySpark → Gold dbt → Power BI**, governed by Unity Catalog and orchestrated with Databricks Jobs.
+A portfolio-scale YouTube Analytics lakehouse based on data from the **Sanchari** channel. The implemented engineering stack includes Python, the YouTube Data and Analytics APIs, PySpark, Delta Lake, Unity Catalog and Databricks. The target architecture adds **dbt Core, Gold dimensional models, Databricks Jobs and Power BI**, with a separate Microsoft Fabric / DP-600 learning track.
 
-> Status: Day 1 scaffold only. No YouTube API access, Databricks deployment, or actual pipeline execution has yet been configured. Do not describe this as a deployed production system.
+> **Project status — 15 November 2026:** Local YouTube API extraction, JSONL landing, Bronze Delta and Silver Delta processing have been implemented and exercised. Data-quality and repeat-MERGE checks have passed. **dbt Gold, scheduled Jobs, Power BI reporting and Microsoft Fabric implementation remain planned.** This is a working educational/portfolio pipeline, not an enterprise production deployment.
 
-## Day 1 goals
-- [ ] Describe the end-to-end architecture and metric grains
-- [ ] Execute `notebooks/00_workspace_validation.py` in Databricks
-- [ ] Establish local Python 3.11+, virtual environment and Git
-- [ ] Run tests locally
-- [ ] Publish to a new GitHub repository, with secret scanning hygiene
+## Architecture and status
 
-## Local setup (Windows PowerShell)
+```text
+YouTube Data API + YouTube Analytics API
+           |
+           v
+Local Python extraction, OAuth, JSONL + run manifests          [IMPLEMENTED]
+           |
+           v
+Unity Catalog Volume landing                                  [IMPLEMENTED]
+           |
+           v
+Bronze Delta: raw video-day JSON and ingestion lineage        [IMPLEMENTED]
+           |
+           v
+Silver Delta: PySpark validation, deduplication, MERGE         [IMPLEMENTED]
+           |
+           v
+dbt staging + Gold dimensional models                         [PLANNED]
+           |
+           v
+Power BI semantic model and analytics dashboard               [PLANNED]
 
-Install Python 3.11 or 3.12, Git, and VS Code first. In this repository folder:
+Databricks Jobs / scheduling and monitoring                    [PLANNED]
+GitHub Actions: Python unit tests                              [IMPLEMENTED]
+Microsoft Fabric / DP-600 practical track                      [PLANNED — ACCESS TO CHECK]
+```
+
+See [architecture documentation](docs/architecture.md) for the intended end-to-end design. It includes some planned components that are not yet deployed.
+
+## Verified Databricks processing
+
+Results below were observed in the Databricks notebooks on **15 November 2026**. They are point-in-time observations, not live reporting figures.
+
+| Check | Result |
+| --- | ---: |
+| Bronze video-day rows | 37,327 |
+| Valid rows entering Silver deduplication | 37,327 |
+| Unique Silver video-day rows | 36,251 |
+| Overlapping extraction rows reconciled | 1,076 |
+| Quarantined rows | 0 |
+| Duplicate Silver business-key groups | 0 |
+| Null Silver business-key rows | 0 |
+| Disallowed negative metric rows | 0 |
+| Valid Silver observations with negative daily likes | 330 |
+| Silver acceptance tests | PASS |
+
+The Silver business key is **`(channel_id, video_id, reporting_date)`**. The transformation uses a PySpark window to choose a version for each key, then a Delta `MERGE` to insert new keys and update qualifying newer records. On 15 November, repeated unchanged MERGEs (Delta versions 4 and 5) reported **zero inserted, updated and deleted rows**, establishing idempotent writes for that input.
+
+**Scope distinction:** The current Silver code **rescans all Bronze rows** before the MERGE. Although the output is repeatable and the extractor supports incremental API windows, fully incremental *Bronze-to-Silver source consumption* with watermarks or change tracking has **not** been implemented.
+
+## Implemented work
+
+### API extraction and JSONL landing
+
+Local Python scripts access the YouTube APIs using OAuth, write video/analytics extraction outputs with run manifests and provenance, support historical backfills, and maintain an incremental extraction checkpoint. Overlapping report windows are expected because historical YouTube Analytics metrics can change. See [Day 3 validation notes](docs/day3-validation.md).
+
+### Bronze — raw, traceable observations
+
+[Bronze ingestion notebook](databricks/01_bronze_youtube_ingestion..ipynb) imports landed video-day JSONL from a Unity Catalog volume, preserves the original JSON and source file/run fields, and uses an **insert-only Delta MERGE** keyed by run, video and reporting date to avoid duplicate ingestion on a rerun.
+
+Table: `workspace.sanchari_bronze.youtube_video_daily_raw`.
+
+### Silver — cleaned, deduplicated observations
+
+[Silver processing notebook](databricks/02_silver_youtube_daily.ipynb) parses nested metrics, normalizes types, resolves missing channel IDs using same-video mapping evidence, validates record quality, selects winners from overlapping source extracts, and applies a conditional Delta MERGE.
+
+Tables: `workspace.sanchari_silver.youtube_video_daily` and `workspace.sanchari_silver.youtube_video_daily_quarantine`.
+
+Negative daily **likes** are allowed because a daily net change can be negative; views, watch time, duration, comments and shares are checked for invalid negative values. Rejected rows receive a reason and are written to the Silver quarantine table. The quarantine table is derived output, not a modification of Bronze.
+
+### Automated Python testing
+
+The repository includes tests for local extraction, history and quality logic. The [GitHub Actions Python workflow](.github/workflows/python-ci.yml) runs unit tests on pushes and pull requests. The [run associated with the Silver notebook commit](https://github.com/deep19901985/sanchari-youtube-analytics/actions/runs/43698675658) completed successfully on 15 November 2026. **This CI run does not execute the Databricks notebooks.**
+
+## Repository guide
+
+| Path | Purpose |
+| --- | --- |
+| `databricks/01_bronze_youtube_ingestion..ipynb` | Bronze Delta ingestion and rerun test |
+| `databricks/02_silver_youtube_daily.ipynb` | Silver PySpark parsing, quality, deduplication and MERGE |
+| `scripts/` | Local YouTube API checks, extraction, backfills and landing validation |
+| `src/sanchari/` | Shared Python ingestion, history and validation modules |
+| `tests/` | Python unit tests |
+| `docs/` | Architecture and validation evidence |
+| `.github/workflows/python-ci.yml` | CI for local Python tests |
+
+## Local Python setup
+
+From the repository root in Windows PowerShell, with Python 3.11 installed:
 
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-python scripts/check_local.py
 pytest -q
 ```
 
-If `py -3.11` is unavailable, run `py -0p` to view installed Python versions and use an available supported version (3.11+). If PowerShell activation is blocked, use `.venv\Scripts\python.exe` without activation, e.g. `.venv\Scripts\python.exe -m pytest -q`.
+If activation is blocked, use `.venv\Scripts\python.exe -m pytest -q`. API extraction requires a correctly configured, locally protected OAuth client and permissions; **never commit tokens, client secrets, `.env` files or raw extracts**. Databricks notebooks require their expected tables and landing files; importing a notebook alone does not reproduce these results.
 
-No Google API, Databricks, or dbt credentials are necessary for Day 1 local tests. OAuth clients and dbt adapter will be configured in later days, after validating the workspace.
+## Remaining roadmap: Sanchari + DP-600
 
-## Databricks validation
+| Day | Sanchari portfolio (Databricks/dbt/Power BI) | Microsoft Fabric / DP-600 parallel learning |
+| --- | --- | --- |
+| 1–5 | API extraction, Bronze and initial Silver built | Not started |
+| 6 | Silver quality and idempotency checks verified; document and publish work | Compare Fabric Lakehouse and Delta operations; check Fabric access |
+| 7 | dbt Core setup and staging models | Try Fabric workspace/lakehouse and SQL if access is available |
+| 8 | Gold star schema and dbt tests | Build a small Sanchari Fabric star schema, if possible |
+| 9 | Databricks Jobs and orchestration | Fabric Data Pipelines and notebook scheduling |
+| 10 | Power BI dashboard | Semantic models, DAX, relationships, storage modes |
+| 11 | Monitoring, reliability and optimisation | RLS, performance, refresh, Direct Lake concepts |
+| 12 | CI, documentation, end-to-end demo and interviews | Fabric security, governance, deployment, practice assessment |
 
-1. Open an existing Free Edition workspace (or create one).
-2. Create a Python notebook and paste the contents of `notebooks/00_workspace_validation.py`, or import it using your workspace's available import control.
-3. Attach to the default **serverless** compute. Run the cells and record the outputs **without sharing workspace tokens, cookies or secrets**.
-4. Verify availability of SQL Warehouses, Jobs, Pipelines, and Catalog Explorer via the UI. Document visible options in `docs/day1-validation.md`.
-5. Do **not** create Azure paid compute or assume Academy Labs / classic clusters are available.
+Follow Day 12 with **dedicated DP-600 revision and mock assessments**. A Fabric exercise is only marked implemented once actually executed and validated; Microsoft Learn study alone is not a deployed Fabric solution.
 
-See `docs/architecture.md` for design, and `docs/day1-validation.md` for the results template.
+## Current limitations and next engineering improvements
 
-## Repository structure
+- Bronze-to-Silver reads currently scan all Bronze rows; add a safe watermark/change-data strategy and tests for late updates.
+- Validate retries, failure recovery, scheduling and monitoring in the actual Databricks environment before claiming production-style orchestration.
+- dbt models, a tested Gold star schema and the Power BI semantic model/dashboard are not yet present.
+- Fabric access was previously blocked; availability must be verified before attempting implementation.
+- YouTube Analytics daily measures and cumulative YouTube Data API counters have different semantics; avoid aggregating them as though they are interchangeable.
+- Some planned architectures and data contracts are documented but have not yet been exercised. Do not claim an SLA-backed production deployment from this portfolio project.
 
-```text
-.
-├── .github/workflows/python-ci.yml   # Local-only CI on pull requests and pushes
-├── .gitignore                         # Credential and data exclusions
-├── .env.example                       # Variable names, not secrets
-├── docs/
-│   ├── architecture.md
-│   └── day1-validation.md
-├── notebooks/
-│   └── 00_workspace_validation.py
-├── scripts/
-│   └── check_local.py
-├── src/sanchari/
-│   ├── __init__.py
-│   └── quality.py
-├── tests/test_quality.py
-└── pyproject.toml
-```
+## Useful references
 
-## Initial lakehouse contracts
-
-- `bronze.video_metadata_raw`: one row per **API response record/ingestion**, raw payload plus ingestion metadata.
-- `bronze.video_statistics_snapshot_raw`: one row per **video per snapshot timestamp** (cumulative counters).
-- `bronze.video_daily_analytics_raw`: one row per **video-day (and any selected breakdowns)** per report extraction; backfill windows may overlap.
-- `silver.dim_video`: one current record per video ID, with optional historical metadata later.
-- `silver.fct_video_stats_snapshot`: one row per video ID / snapshot timestamp.
-- `silver.fct_video_daily`: one row per video ID / day, for the exact selected report dimensions, with reconciled reruns.
-- `gold.dim_video`, `gold.dim_date`, `gold.fct_video_daily`: star schema for analysis. Actual available columns depend on API access and dimensions selected.
-
-## Design decisions and planned trade-offs
-
-- **Local ingestion first**: Free Edition serverless outbound internet can be limited. The local process obtains OAuth access and writes JSONL artifacts, which are then uploaded to a Unity Catalog volume. Cloud ingestion is a later optional enhancement.
-- **Raw replay**: preserve source JSON, `ingested_at_utc`, `source_endpoint`, `extract_run_id`, and report window.
-- **Daily Analytics != lifetime statistics**: never subtract or sum incompatible metrics without clarifying provenance.
-- **Idempotency**: persist run metadata and MERGE by business grain in Silver; overlap the trailing Analytics window when late updates are plausible.
-- **Quality**: duplicate-grain tests, not-null keys, valid date ranges, nonnegative metrics; quarantine malformed records.
-- **Secrets**: use OAuth and local gitignored credential storage; never commit Google client secrets, refresh tokens, access tokens, `.env`, data extracts or `.databrickscfg`.
-- **Professional presentation**: show architecture, tests, operational design and limitations; do not claim SLA-backed production deployment from Free Edition.
-
-## Planned 12-day scope (~66 focused hours)
-
-1. Architecture, environment, Python & GitHub
-2. Google Cloud project, OAuth setup and first YouTube Data API extraction
-3. YouTube Analytics API, incremental capture and landing data contracts
-4. Bronze ingestion & Delta raw tables
-5. Silver PySpark cleanup, schema handling and deduplication
-6. Incremental MERGE, watermarks, reprocessing and checks
-7. dbt Core setup, Databricks adapter, staging models
-8. Dimensional Gold models, dbt generic and custom tests
-9. Lakeflow/Auto Loader evaluation and scheduled orchestration
-10. Monitoring, error recovery, cost/performance practices
-11. Power BI dashboard, KPIs and documentation
-12. GitHub Actions, end-to-end demo, validation, interview narrative
-
-The precise ordering can be adjusted when features are unavailable.
-
-## References
-
-- Databricks Free Edition: https://docs.databricks.com/aws/en/getting-started/free-edition
-- Free Edition limits: https://docs.databricks.com/aws/en/getting-started/free-edition-limitations
-- Unity Catalog volume uploads: https://docs.databricks.com/aws/en/volumes/volume-files
-- YouTube Analytics query: https://developers.google.com/youtube/analytics/reference/reports/query
-- dbt Databricks setup: https://docs.getdbt.com/docs/local/connect-data-platform/databricks-setup
+- [YouTube Analytics reporting API](https://developers.google.com/youtube/analytics/reference/reports/query)
+- [Databricks Free Edition](https://docs.databricks.com/aws/en/getting-started/free-edition)
+- [Unity Catalog volumes](https://docs.databricks.com/aws/en/volumes/volume-files)
+- [dbt Databricks setup](https://docs.getdbt.com/docs/local/connect-data-platform/databricks-setup)
+- [Microsoft DP-600 study guide](https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/dp-600)
